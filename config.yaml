@@ -1,0 +1,57 @@
+# Transformer-GAT Medication Recommendation Configuration
+# Clinical decision support only — physician review required before medication use.
+
+seed: 42
+device: auto  # auto | cuda | cpu
+
+data:
+  num_diag: 50
+  num_med: 100
+  num_lab: 20
+  max_visits: 32
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  synthetic:
+    num_patients: 200
+    min_visits: 3
+    max_visits: 12
+    ddi_density: 0.02
+
+model:
+  d_model: 256
+  dropout: 0.3
+  transformer:
+    num_layers: 4
+    num_heads: 8
+    dim_feedforward: 512
+  gat:
+    num_layers: 3
+    heads: 4
+    dropout: 0.2
+
+loss:
+  lambda_rec: 1.0
+  lambda_ddi: 0.5
+  use_bce_logits: true
+
+training:
+  batch_size: 16
+  num_epochs: 50
+  lr: 1.0e-4
+  weight_decay: 0.01
+  warmup_epochs: 3
+  early_stopping_patience: 15
+  threshold: 0.5
+  num_workers: 0
+
+paths:
+  processed_dir: data/processed
+  checkpoint_dir: checkpoints
+  log_dir: logs
+  best_checkpoint: checkpoints/best.pt
+
+explain:
+  num_background: 32
+  top_k_features: 10
+  top_k_drugs: 10

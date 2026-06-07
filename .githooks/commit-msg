@@ -1,0 +1,4 @@
+#!/bin/sh
+# Remove Cursor agent co-author trailer from commit messages (this repo only).
+sed -i '/^Co-authored-by: Cursor <cursoragent@cursor.com>/d' "$1"
+sed -i '/^Co-authored-by:.*cursoragent@cursor.com/d' "$1"

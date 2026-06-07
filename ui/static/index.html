@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Transformer-GAT MedRec · Clinical Decision Support</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-icon" aria-hidden="true">Rx</div>
+      <div>
+        <h1>MedRec</h1>
+        <p>Transformer-GAT</p>
+      </div>
+    </div>
+    <nav class="nav" role="navigation">
+      <button class="nav-item active" data-view="pipeline">Pipeline</button>
+      <button class="nav-item" data-view="overview">Overview</button>
+      <button class="nav-item" data-view="patient">Patient timeline</button>
+      <button class="nav-item" data-view="recommend">Recommendations</button>
+      <button class="nav-item" data-view="fusion">Fusion &amp; safety</button>
+      <button class="nav-item" data-view="explain">Explainability</button>
+      <button class="nav-item" data-view="metrics">Evaluation</button>
+    </nav>
+    <div class="sidebar-footer">
+      <div id="status-badge" class="badge badge-warn">Loading…</div>
+      <p class="footnote">Research prototype · not for autonomous prescribing</p>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="disclaimer" role="alert">
+        <strong>Clinical decision support only.</strong>
+        All medication suggestions require physician review before use.
+      </div>
+      <div class="patient-select">
+        <label for="patient-select">Patient</label>
+        <select id="patient-select" aria-label="Select patient"></select>
+        <button id="btn-refresh" class="btn btn-secondary" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <!-- Pipeline (all run.sh steps) -->
+    <section id="view-pipeline" class="view active">
+      <h2>Full pipeline</h2>
+      <p class="lead">
+        Run the same steps as <code>./run.sh</code>: setup → train → evaluate → test → SHAP → explore in the dashboard.
+        Long steps run in the background; logs update live below.
+      </p>
+      <div class="pipeline-toolbar">
+        <button id="btn-run-all" class="btn btn-primary" type="button">Run all steps</button>
+        <button id="btn-cancel-pipeline" class="btn btn-secondary" type="button">Cancel</button>
+        <button id="btn-reload-model" class="btn btn-secondary" type="button">Reload model</button>
+        <label class="pipeline-option">
+          <input type="checkbox" id="chk-skip-train" />
+          Skip train if checkpoint exists
+        </label>
+        <span id="pipeline-busy" class="pipeline-busy hidden">Job running…</span>
+      </div>
+      <div id="pipeline-setup-banner" class="setup-banner"></div>
+      <ol id="pipeline-steps" class="pipeline-steps"></ol>
+      <div class="log-panel">
+        <div class="log-header">
+          <h3>Step log</h3>
+          <select id="log-step-select" aria-label="Select step log"></select>
+        </div>
+        <pre id="pipeline-log" class="log-console" aria-live="polite">Select a step or run the pipeline to view output.</pre>
+      </div>
+    </section>
+
+    <!-- Overview -->
+    <section id="view-overview" class="view">
+      <h2>System overview</h2>
+      <p class="lead">
+        Longitudinal EHR visits are encoded with a <strong>Transformer</strong>, drug interactions with a
+        <strong>DDI-aware GAT</strong>, fused via a <strong>learnable gate</strong>, then scored for safe multi-label recommendations.
+      </p>
+      <div class="arch-grid">
+        <div class="arch-card">
+          <span class="step">1</span>
+          <h3>Clinical embedding</h3>
+          <p>Diagnoses, medications, and labs per visit → unified visit vectors.</p>
+        </div>
+        <div class="arch-card">
+          <span class="step">2</span>
+          <h3>Temporal encoder</h3>
+          <p>Transformer with padding mask; pools the last valid visit for patient state.</p>
+        </div>
+        <div class="arch-card">
+          <span class="step">3</span>
+          <h3>DDI-aware GAT</h3>
+          <p>Graph attention over drug nodes; patient drug context from latest meds.</p>
+        </div>
+        <div class="arch-card">
+          <span class="step">4</span>
+          <h3>Gated fusion</h3>
+          <p>Balances temporal patient signal vs. drug-graph signal.</p>
+        </div>
+        <div class="arch-card">
+          <span class="step">5</span>
+          <h3>Recommendation head</h3>
+          <p>Multi-label sigmoid outputs with BCE + DDI-aware penalty.</p>
+        </div>
+        <div class="arch-card highlight">
+          <span class="step">6</span>
+          <h3>DeepSHAP</h3>
+          <p>Feature attribution for diagnoses, medications, and labs.</p>
+        </div>
+      </div>
+      <div class="flow-diagram" aria-label="Architecture flow">
+        <div class="flow-node">EHR visits</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node">Transformer</div>
+        <div class="flow-arrow">+</div>
+        <div class="flow-node">GAT (DDI)</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node">Gate fusion</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node accent">Safe meds</div>
+      </div>
+    </section>
+
+    <!-- Patient -->
+    <section id="view-patient" class="view">
+      <h2>Patient timeline</h2>
+      <p class="lead" id="patient-meta">Select a patient to view visit-level clinical activity.</p>
+      <div class="chart-row">
+        <div class="chart-card">
+          <h3>Visits · clinical density</h3>
+          <canvas id="chart-visits" height="120"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Lab signal (mean per visit)</h3>
+          <canvas id="chart-labs" height="120"></canvas>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="visit-table">
+          <thead>
+            <tr>
+              <th>Visit</th>
+              <th>Diagnoses</th>
+              <th>Medications</th>
+              <th>Lab μ</th>
+              <th>Sample IDs</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Recommendations -->
+    <section id="view-recommend" class="view">
+      <h2>Medication recommendations</h2>
+      <p class="lead">Model probabilities for the selected patient (threshold applied for binary set).</p>
+      <div class="kpi-row" id="rec-kpis"></div>
+      <div class="chart-row">
+        <div class="chart-card wide">
+          <h3>Top predicted medications</h3>
+          <canvas id="chart-drugs" height="140"></canvas>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="rec-table">
+          <thead>
+            <tr>
+              <th>Drug ID</th>
+              <th>Probability</th>
+              <th>At threshold</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Fusion & safety -->
+    <section id="view-fusion" class="view">
+      <h2>Fusion &amp; drug safety</h2>
+      <p class="lead">How much the model relies on patient history vs. drug-graph context, and DDI flags among predicted drugs.</p>
+      <div class="fusion-panel">
+        <div class="fusion-gauge">
+          <canvas id="chart-fusion" height="160"></canvas>
+          <p class="gauge-caption">Patient pathway vs. drug-graph pathway (mean gate)</p>
+        </div>
+        <div class="ddi-panel" id="ddi-panel">
+          <h3>DDI pairs in current prediction</h3>
+          <ul id="ddi-list" class="ddi-list"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Explain -->
+    <section id="view-explain" class="view">
+      <h2>Explainability (SHAP)</h2>
+      <p class="lead">Top contributing clinical features for the ranked medication outputs. May take a few seconds.</p>
+      <button id="btn-explain" class="btn btn-primary" type="button">Run SHAP explanation</button>
+      <div id="explain-loading" class="loading hidden">Computing attributions…</div>
+      <div class="chart-card wide">
+        <canvas id="chart-shap" height="160"></canvas>
+      </div>
+      <div id="explain-drugs" class="tag-row"></div>
+    </section>
+
+    <!-- Metrics -->
+    <section id="view-metrics" class="view">
+      <h2>Test-set evaluation</h2>
+      <p class="lead">Aggregate metrics from the held-out test split (same synthetic seed as training).</p>
+      <div class="kpi-row" id="metrics-kpis"></div>
+      <div class="chart-card wide">
+        <canvas id="chart-metrics" height="120"></canvas>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
