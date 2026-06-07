@@ -16,8 +16,12 @@ from src.train import train_model
 from src.utils.config import load_config
 
 
-def parse_bool(s: str) -> bool:
-    return s.lower() in ("true", "1", "yes")
+def parse_bool(s: str) -> bool | None:
+    if s.lower() in ("true", "1", "yes"):
+        return True
+    if s.lower() in ("false", "0", "no"):
+        return False
+    return None
 
 
 def main() -> None:
@@ -26,7 +30,12 @@ def main() -> None:
     )
     parser.add_argument("--config", type=str, default="config.yaml")
     parser.add_argument("--mode", type=str, choices=["train", "eval", "explain"], default="train")
-    parser.add_argument("--use_synthetic", type=str, default="true")
+    parser.add_argument(
+        "--use_synthetic",
+        type=str,
+        default="false",
+        help="true=synthetic fake data, false=MIMIC-III demo from PhysioNet (default)",
+    )
     parser.add_argument("--checkpoint", type=str, default="checkpoints/best.pt")
     args = parser.parse_args()
 

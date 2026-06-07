@@ -10,3 +10,6 @@ logs/
 .DS_Store
 .idea/
 .vscode/
+data/raw/mimiciii-demo/*.zip
+data/raw/mimiciii-demo/mimic-iii-clinical-database-demo-1.4/
+data/processed/mimic_demo/

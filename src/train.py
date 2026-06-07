@@ -14,13 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.data.collate import collate_patient_batch
-from src.data.dataset import (
-    MedicationRecommendationDataset,
-    generate_synthetic_patients,
-    split_patients_by_id,
-)
-from src.data.ddi_graph import build_random_ddi_graph, ddi_adjacency_upper
+from src.data.load_data import apply_data_dims_to_config, build_dataloaders as _build_dataloaders
 from src.losses.medication_loss import MedicationLoss
 from src.metrics.metrics import compute_all_metrics
 from src.models.transformer_gat_model import TransformerGATMedRec
@@ -32,67 +26,11 @@ from src.utils.seed import set_seed
 
 def build_dataloaders(
     config: Dict[str, Any],
-    use_synthetic: bool = True,
-) -> Tuple[DataLoader, DataLoader, DataLoader, torch.Tensor, torch.Tensor, torch.Tensor]:
+    use_synthetic: bool | None = None,
+) -> Tuple[DataLoader, DataLoader, DataLoader, torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, Any]]:
     """Build train/val/test loaders and DDI graph tensors."""
-    data_cfg = config["data"]
-    seed = config.get("seed", 42)
-
-    if use_synthetic:
-        syn = data_cfg["synthetic"]
-        patients = generate_synthetic_patients(
-            num_patients=syn["num_patients"],
-            num_diag=data_cfg["num_diag"],
-            num_med=data_cfg["num_med"],
-            num_lab=data_cfg["num_lab"],
-            min_visits=syn["min_visits"],
-            max_visits=syn["max_visits"],
-            seed=seed,
-        )
-    else:
-        # TODO: load from data/processed via preprocessing.load_processed
-        raise NotImplementedError("Real MIMIC loading not implemented — use --use_synthetic true")
-
-    train_p, val_p, test_p = split_patients_by_id(
-        patients,
-        data_cfg["train_ratio"],
-        data_cfg["val_ratio"],
-        data_cfg["test_ratio"],
-        seed=seed,
-    )
-
-    batch_size = config["training"]["batch_size"]
-    num_workers = config["training"].get("num_workers", 0)
-
-    train_loader = DataLoader(
-        MedicationRecommendationDataset(train_p),
-        batch_size=batch_size,
-        shuffle=True,
-        collate_fn=collate_patient_batch,
-        num_workers=num_workers,
-    )
-    val_loader = DataLoader(
-        MedicationRecommendationDataset(val_p),
-        batch_size=batch_size,
-        shuffle=False,
-        collate_fn=collate_patient_batch,
-        num_workers=num_workers,
-    )
-    test_loader = DataLoader(
-        MedicationRecommendationDataset(test_p),
-        batch_size=batch_size,
-        shuffle=False,
-        collate_fn=collate_patient_batch,
-        num_workers=num_workers,
-    )
-
-    edge_index, edge_weight, adj_upper = build_random_ddi_graph(
-        data_cfg["num_med"],
-        data_cfg["synthetic"]["ddi_density"],
-        seed=seed,
-    )
-    adj_upper = ddi_adjacency_upper(data_cfg["num_med"], edge_index, edge_weight)
-    return train_loader, val_loader, test_loader, edge_index, edge_weight, adj_upper
+    loaders = _build_dataloaders(config, ROOT, use_synthetic)
+    return loaders
 
 
 def build_model(config: Dict[str, Any], ablation: Optional[Dict[str, Any]] = None) -> TransformerGATMedRec:
@@ -176,9 +114,11 @@ def train_model(
     device = resolve_device(config.get("device", "auto"))
     logger = get_logger("train", config["paths"].get("log_dir"))
 
-    train_loader, val_loader, test_loader, edge_index, edge_weight, adj_upper = build_dataloaders(
+    train_loader, val_loader, test_loader, edge_index, edge_weight, adj_upper, data_meta = build_dataloaders(
         config, use_synthetic
     )
+    if data_meta.get("source") == "mimic_demo":
+        config = apply_data_dims_to_config(config, data_meta)
     adj_upper = adj_upper.to(device)
 
     ab = ablation or {}

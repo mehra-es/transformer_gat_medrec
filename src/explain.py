@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 from src.data.collate import collate_patient_batch
 from src.models.transformer_gat_model import TransformerGATMedRec
+from src.data.load_data import apply_data_dims_to_config
 from src.train import build_dataloaders, build_model
 from src.utils.checkpoint import load_checkpoint
 from src.utils.config import load_config, resolve_device
@@ -79,7 +80,7 @@ class ShapWrapperModel(torch.nn.Module):
 def explain_patient(
     config: Dict[str, Any],
     checkpoint_path: str,
-    use_synthetic: bool = True,
+    use_synthetic: bool | None = False,
     patient_idx: int = 0,
 ) -> Dict[str, Any]:
     """
@@ -92,7 +93,9 @@ def explain_patient(
     data_cfg = config["data"]
     max_visits = data_cfg.get("max_visits", 32)
 
-    _, _, test_loader, edge_index, edge_weight, _ = build_dataloaders(config, use_synthetic)
+    _, _, test_loader, edge_index, edge_weight, _, data_meta = build_dataloaders(config, use_synthetic)
+    if data_meta.get("source") == "mimic_demo":
+        config = apply_data_dims_to_config(config, data_meta)
     edge_index = edge_index.to(device)
     edge_weight = edge_weight.to(device)
 
@@ -187,7 +190,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, default="checkpoints/best.pt")
     parser.add_argument("--config", type=str, default="config.yaml")
-    parser.add_argument("--use_synthetic", type=str, default="true")
+    parser.add_argument("--use_synthetic", type=str, default="false")
     parser.add_argument("--patient_idx", type=int, default=0)
     args = parser.parse_args()
     config = load_config(ROOT / args.config)

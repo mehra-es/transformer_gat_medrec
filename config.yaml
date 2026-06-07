@@ -5,13 +5,22 @@ seed: 42
 device: auto  # auto | cuda | cpu
 
 data:
-  num_diag: 50
+  # mimic_demo = PhysioNet MIMIC-III demo v1.4 (default)
+  # synthetic = in-memory fake patients (for quick tests)
+  source: mimic_demo
+  num_diag: 50   # used only for synthetic; mimic uses processed meta.json sizes
   num_med: 100
   num_lab: 20
   max_visits: 32
   train_ratio: 0.7
   val_ratio: 0.15
   test_ratio: 0.15
+  mimic_demo:
+    raw_dir: data/raw/mimiciii-demo
+    processed_dir: data/processed/mimic_demo
+    top_diag: 200
+    top_med: 300
+    top_lab_items: 20
   synthetic:
     num_patients: 200
     min_visits: 3

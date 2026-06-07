@@ -81,12 +81,20 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Train (synthetic demo)
+## Train (MIMIC-III demo — default)
+
+Uses real de-identified patients from [PhysioNet MIMIC-III Demo v1.4](https://physionet.org/content/mimiciii-demo/1.4/). CSVs download automatically on first run.
 
 From the project root `transformer_gat_medrec/` (after activating the venv):
 
 ```bash
 source .venv/bin/activate
+python src/main.py --config config.yaml --mode train
+```
+
+Synthetic fake data (optional):
+
+```bash
 python src/main.py --config config.yaml --mode train --use_synthetic true
 ```
 
@@ -101,19 +109,19 @@ Best checkpoint: `checkpoints/best.pt`
 ## Evaluate
 
 ```bash
-.venv/bin/python src/evaluate.py --checkpoint checkpoints/best.pt --use_synthetic true
+.venv/bin/python src/evaluate.py --checkpoint checkpoints/best.pt
 ```
 
 Or via main:
 
 ```bash
-.venv/bin/python src/main.py --config config.yaml --mode eval --use_synthetic true --checkpoint checkpoints/best.pt
+.venv/bin/python src/main.py --config config.yaml --mode eval --checkpoint checkpoints/best.pt
 ```
 
 ## Explain (SHAP)
 
 ```bash
-.venv/bin/python src/explain.py --checkpoint checkpoints/best.pt --use_synthetic true --patient_idx 0
+.venv/bin/python src/explain.py --checkpoint checkpoints/best.pt --patient_idx 0
 ```
 
 ## Tests
@@ -152,14 +160,16 @@ Open **http://127.0.0.1:8080** in your browser.
 
 Variants: `full`, `no_transformer`, `no_gat`, `no_gated_fusion`, `no_ddi_loss`, or `all`.
 
-## Real MIMIC data
+## Data sources
 
-1. Place raw exports in `data/raw/`.
-2. Implement TODOs in `src/data/preprocessing.py`.
-3. Save processed splits to `data/processed/`.
-4. Train with `--use_synthetic false` once loading is implemented.
+| Mode | Command | Source |
+|------|---------|--------|
+| **MIMIC-III demo** (default) | `--use_synthetic false` or omit flag | PhysioNet open demo |
+| **Synthetic** | `--use_synthetic true` | Local random generator |
 
 Patient-level train/val/test splits prevent leakage.
+
+Full credentialed MIMIC-III/IV: extend `src/data/preprocessing.py` (see `data/README.md`).
 
 ## Metrics
 

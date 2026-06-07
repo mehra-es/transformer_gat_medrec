@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 from src.data.collate import collate_patient_batch
 from src.metrics.metrics import compute_all_metrics
 from src.models.transformer_gat_model import TransformerGATMedRec
+from src.data.load_data import apply_data_dims_to_config
 from src.train import build_dataloaders, build_model
 from src.utils.checkpoint import load_checkpoint
 from src.utils.config import load_config, resolve_device
@@ -27,7 +28,7 @@ from src.utils.seed import set_seed
 def evaluate_checkpoint(
     checkpoint_path: str,
     config_path: str = "config.yaml",
-    use_synthetic: bool = True,
+    use_synthetic: bool | None = False,
 ) -> dict:
     """Load checkpoint and report test metrics."""
     config = load_config(ROOT / config_path if not Path(config_path).is_absolute() else config_path)
@@ -35,7 +36,9 @@ def evaluate_checkpoint(
     device = resolve_device(config.get("device", "auto"))
     logger = get_logger("evaluate")
 
-    _, _, test_loader, edge_index, edge_weight, adj_upper = build_dataloaders(config, use_synthetic)
+    _, _, test_loader, edge_index, edge_weight, adj_upper, data_meta = build_dataloaders(config, use_synthetic)
+    if data_meta.get("source") == "mimic_demo":
+        config = apply_data_dims_to_config(config, data_meta)
     adj_upper = adj_upper.to(device)
     edge_index = edge_index.to(device)
     edge_weight = edge_weight.to(device)
@@ -75,7 +78,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--config", type=str, default="config.yaml")
-    parser.add_argument("--use_synthetic", type=str, default="true")
+    parser.add_argument("--use_synthetic", type=str, default="false")
     args = parser.parse_args()
     use_syn = args.use_synthetic.lower() in ("true", "1", "yes")
     evaluate_checkpoint(args.checkpoint, args.config, use_syn)
