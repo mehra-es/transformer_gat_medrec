@@ -17,6 +17,7 @@ from src.data.collate import collate_patient_batch
 from src.data.dataset import MedicationRecommendationDataset
 from src.explain import explain_patient
 from src.metrics.metrics import compute_all_metrics
+from src.data.load_data import apply_data_dims_to_config
 from src.train import build_dataloaders, build_model
 from src.utils.checkpoint import load_checkpoint
 from src.utils.config import load_config, resolve_device
@@ -30,7 +31,7 @@ class InferenceService:
         self,
         config_path: str | Path | None = None,
         checkpoint_path: str | Path | None = None,
-        use_synthetic: bool = True,
+        use_synthetic: bool | None = False,
     ) -> None:
         self.root = ROOT
         self.config_path = Path(config_path or self.root / "config.yaml")
@@ -44,9 +45,11 @@ class InferenceService:
         if not self.checkpoint_path.is_absolute():
             self.checkpoint_path = self.root / self.checkpoint_path
 
-        _, _, self.test_loader, self.edge_index, self.edge_weight, self.adj_upper = (
+        _, _, self.test_loader, self.edge_index, self.edge_weight, self.adj_upper, data_meta = (
             build_dataloaders(self.config, use_synthetic)
         )
+        if data_meta.get("source") == "mimic_demo":
+            self.config = apply_data_dims_to_config(self.config, data_meta)
         self.edge_index = self.edge_index.to(self.device)
         self.edge_weight = self.edge_weight.to(self.device)
         self.adj_upper = self.adj_upper.to(self.device)
