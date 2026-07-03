@@ -1,182 +1,114 @@
 # Transformer-GAT Medication Recommendation
 
-Research-grade **clinical decision support** framework combining a Transformer temporal encoder, DDI-aware Graph Attention Network (GAT), learnable gated fusion, and DeepSHAP explainability for longitudinal EHR medication recommendation.
+Research-grade **clinical decision support** framework for safe and explainable medication recommendation from longitudinal EHR data, aligned with the architecture specified in *A Transformer- and Graph-Based Framework for Safe and Explainable Medication Recommendation*.
 
 > **Not autonomous prescribing.** All outputs require physician review before any medication use.
 
-## Architecture
+## Architecture (seven modules)
 
-1. Clinical embedding (diagnosis / medication / lab)
-2. Sinusoidal positional encoding
-3. Transformer temporal encoder (last valid visit pooling)
-4. DDI-aware GAT on drug graph
-5. Learnable gated fusion
-6. Multi-label recommendation head
-7. Loss: `L_total = λ1·L_rec + λ2·L_DDI`
-8. DeepSHAP explanations
+| Module | Component | Status in this repo |
+|--------|-----------|---------------------|
+| 1 | Clinical embedding + sinusoidal positional encoding | Implemented |
+| 2 | Transformer temporal encoder (L=4, h=8) | Implemented |
+| 3 | Learnable gated fusion | Implemented |
+| 4 | Dual-graph drug module (DDI-GAT + molecular substructure GNN) | Implemented |
+| 5 | Multi-objective loss (L_rec + L_DDI + L_outcome + L_xai) | L_rec + L_DDI active; outcome/XAI stubs |
+| 6 | Seven-method explainability | **DeepSHAP only** (IG, LRP, GNNExplainer deferred) |
+| 7 | TCN outcome monitoring | Architectural spec (`src/models/outcome_tcn.py`) |
+
+### Loss function
+
+```
+L_total = λ₁·L_rec + λ₂·L_DDI + λ₃·L_outcome + λ₄·L_xai
+```
+
+Default weights: λ₁=1.0, λ₂=0.5, λ₃=0.3, λ₄=0.1. `L_outcome` and `L_xai` evaluate to zero until Module 7 and Integrated Gradients are wired.
 
 ## Quick start (one script)
 
 ### Linux / macOS
 
-From `transformer_gat_medrec/`:
-
 ```bash
 ./run.sh
 ```
 
-### Windows (PowerShell or CMD)
+### Windows
 
 ```powershell
-cd transformer_gat_medrec
 .\run.ps1
 ```
 
-Or double-click / run from **CMD**:
+Runs **setup → train → evaluate → tests → web dashboard** at http://127.0.0.1:8080.
 
-```bat
-run.bat
-run.bat ui
-run.bat stop
-```
+| Task | Command |
+|------|---------|
+| Full pipeline | `./run.sh` |
+| Train | `./run.sh train` |
+| Evaluate | `./run.sh eval` |
+| SHAP explain | `./run.sh explain` |
+| Four-seed validation | `.venv/bin/python scripts/run_multi_seed.py` |
+| λ_ddi Pareto sweep | `.venv/bin/python scripts/pareto_sweep.py` |
+| Ablation study | `.venv/bin/python src/ablation/run_ablation.py --variant all` |
 
-This runs **setup → train → evaluate → tests → web dashboard** (opens at http://127.0.0.1:8080).
+## Hyperparameters (paper Table 7)
 
-| Task | Linux / macOS | Windows (PowerShell) |
-|------|---------------|----------------------|
-| Full pipeline | `./run.sh` | `.\run.ps1` or `run.bat` |
-| Setup only | `./run.sh setup` | `.\run.ps1 setup` |
-| Train | `./run.sh train` | `.\run.ps1 train` |
-| Evaluate | `./run.sh eval` | `.\run.ps1 eval` |
-| Tests | `./run.sh test` | `.\run.ps1 test` |
-| Dashboard | `./run.sh ui` | `.\run.ps1 ui` |
-| Stop UI | `./run.sh stop` | `.\run.ps1 stop` |
-| Skip train if checkpoint exists | `./run.sh all --skip-train` | `.\run.ps1 all -SkipTrain` |
-| Custom port | `./run.sh ui --port 8081` | `.\run.ps1 ui -Port 8081` |
-| SHAP demo | `./run.sh explain` | `.\run.ps1 explain` |
+| Parameter | Value |
+|-----------|-------|
+| Learning rate | 1×10⁻⁴ |
+| Batch size | 64 |
+| d_model | 256 |
+| Transformer layers | 4 |
+| Attention heads | 8 |
+| GAT layers | 3 |
+| Dropout | 0.30 |
+| Max epochs | 50 |
+| λ₁ (L_rec) | 1.0 |
+| λ₂ (L_DDI) | 0.5 |
+| Seeds | 42, 1, 123, 2024 |
 
-If PowerShell blocks scripts, use `run.bat` or run once:
+## Train
 
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-```
-
-## Setup (manual)
-
-**Linux / macOS:**
-
-```bash
-cd transformer_gat_medrec
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-**Windows:**
-
-```powershell
-cd transformer_gat_medrec
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-## Train (MIMIC-III demo — default)
-
-Uses real de-identified patients from [PhysioNet MIMIC-III Demo v1.4](https://physionet.org/content/mimiciii-demo/1.4/). CSVs download automatically on first run.
-
-From the project root `transformer_gat_medrec/` (after activating the venv):
+Default data: [MIMIC-III Demo v1.4](https://physionet.org/content/mimiciii-demo/1.4/) (auto-download).
 
 ```bash
 source .venv/bin/activate
 python src/main.py --config config.yaml --mode train
 ```
 
-Synthetic fake data (optional):
+Synthetic fallback:
 
 ```bash
 python src/main.py --config config.yaml --mode train --use_synthetic true
 ```
 
-Without activating the venv:
-
-```bash
-.venv/bin/python src/main.py --config config.yaml --mode train --use_synthetic true
-```
-
-Best checkpoint: `checkpoints/best.pt`
-
 ## Evaluate
 
 ```bash
-.venv/bin/python src/evaluate.py --checkpoint checkpoints/best.pt
+python src/evaluate.py --checkpoint checkpoints/best.pt
 ```
 
-Or via main:
+Reports Jaccard, F1-micro/macro, PRAUC, DDI rate, and Safety-Adjusted Effectiveness (SAE = Jaccard × (1 − DDI_rate)).
+
+## Explain (DeepSHAP)
+
+Patient-specific attribution against each patient's top-predicted drugs (visit-mask bug fixed per paper Section 8.5):
 
 ```bash
-.venv/bin/python src/main.py --config config.yaml --mode eval --checkpoint checkpoints/best.pt
+python src/explain.py --checkpoint checkpoints/best.pt --patient_idx 0
 ```
 
-## Explain (SHAP)
+## Ablation variants
 
-```bash
-.venv/bin/python src/explain.py --checkpoint checkpoints/best.pt --patient_idx 0
-```
+`full`, `no_transformer`, `no_gat`, `no_molecular_gnn`, `no_gated_fusion`, `no_ddi_loss`
 
-## Tests
+## Data
 
-```bash
-.venv/bin/pytest tests/ -v
-```
+| Mode | Source |
+|------|--------|
+| **mimic_demo** (default) | PhysioNet open demo |
+| **synthetic** | Local generator for quick tests |
 
-## Web dashboard (UI)
-
-Interactive dashboard for exploring patients, recommendations, fusion weights, DDI safety, SHAP explanations, and test metrics.
-
-```bash
-# From transformer_gat_medrec/ (train first so checkpoints/best.pt exists)
-.venv/bin/pip install fastapi uvicorn
-.venv/bin/python ui/server.py
-```
-
-Open **http://127.0.0.1:8080** in your browser.
-
-| View | What it shows |
-|------|----------------|
-| **Pipeline** | Run all `run.sh` steps (setup, train, eval, test, SHAP) with live logs |
-| Overview | Architecture and data flow |
-| Patient timeline | Per-visit diagnoses, meds, labs |
-| Recommendations | Top drug probabilities vs. ground truth |
-| Fusion & safety | Gate balance (Transformer vs. GAT) and DDI pairs |
-| Explainability | DeepSHAP feature attributions |
-| Evaluation | Test-set Jaccard, F1, PRAUC, DDI rate |
-
-## Ablation
-
-```bash
-.venv/bin/python src/ablation/run_ablation.py --config config.yaml --use_synthetic true --variant full
-```
-
-Variants: `full`, `no_transformer`, `no_gat`, `no_gated_fusion`, `no_ddi_loss`, or `all`.
-
-## Data sources
-
-| Mode | Command | Source |
-|------|---------|--------|
-| **MIMIC-III demo** (default) | `--use_synthetic false` or omit flag | PhysioNet open demo |
-| **Synthetic** | `--use_synthetic true` | Local random generator |
-
-Patient-level train/val/test splits prevent leakage.
-
-Full credentialed MIMIC-III/IV: extend `src/data/preprocessing.py` (see `data/README.md`).
-
-## Metrics
-
-- Jaccard (samples)
-- Micro / macro F1
-- PRAUC (macro over labels)
-- DDI rate on predicted drug pairs
+Full MIMIC-III GAMENet cohort (5,430 patients, 153 meds): extend `src/data/preprocessing.py` with credentialed access.
 
 ## License / disclaimer
 

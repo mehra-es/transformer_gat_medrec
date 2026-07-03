@@ -10,6 +10,7 @@ import torch.nn as nn
 from src.models.clinical_embedding import ClinicalEmbedding
 from src.models.ddi_gat import DDIAwareGAT, aggregate_patient_drug_embedding
 from src.models.gated_fusion import GatedFusion
+from src.models.molecular_gnn import MolecularSubstructureGNN
 from src.models.positional_encoding import PositionalEncoding
 from src.models.recommendation_head import RecommendationHead
 from src.models.transformer_encoder import TransformerTemporalEncoder
@@ -54,6 +55,7 @@ class TransformerGATMedRec(nn.Module):
         use_transformer: if False, use BiLSTM
         use_gat: if False, use learnable drug embedding table
         use_gated_fusion: if False, concatenate and project
+        use_molecular_gnn: if False, skip molecular substructure branch
     """
 
     def __init__(
@@ -69,9 +71,13 @@ class TransformerGATMedRec(nn.Module):
         gat_layers: int = 3,
         gat_heads: int = 4,
         gat_dropout: float = 0.2,
+        molecular_layers: int = 3,
+        molecular_dropout: float = 0.2,
+        molecular_d_out: int = 64,
         use_transformer: bool = True,
         use_gat: bool = True,
         use_gated_fusion: bool = True,
+        use_molecular_gnn: bool = True,
         max_visits: int = 512,
     ) -> None:
         super().__init__()
@@ -79,6 +85,7 @@ class TransformerGATMedRec(nn.Module):
         self.d_model = d_model
         self.use_gat = use_gat
         self.use_gated_fusion = use_gated_fusion
+        self.use_molecular_gnn = use_molecular_gnn
 
         self.clinical_embedding = ClinicalEmbedding(
             num_diag, num_med, num_lab, d_model, dropout
@@ -103,6 +110,15 @@ class TransformerGATMedRec(nn.Module):
             self.drug_embedding = nn.Embedding(num_med, d_model)
             nn.init.normal_(self.drug_embedding.weight, std=0.02)
 
+        if use_molecular_gnn:
+            self.molecular_gnn = MolecularSubstructureGNN(
+                num_med, molecular_d_out, molecular_layers, molecular_dropout
+            )
+            self.drug_fuse_proj = nn.Linear(d_model + molecular_d_out, d_model)
+        else:
+            self.molecular_gnn = None
+            self.drug_fuse_proj = None
+
         if use_gated_fusion:
             self.fusion = GatedFusion(d_model)
         else:
@@ -120,8 +136,15 @@ class TransformerGATMedRec(nn.Module):
         edge_weight: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if self.use_gat:
-            return self.ddi_gat(self.drug_init, edge_index, edge_weight)
-        return self.drug_embedding.weight
+            h_gat = self.ddi_gat(self.drug_init, edge_index, edge_weight)
+        else:
+            h_gat = self.drug_embedding.weight
+
+        if self.use_molecular_gnn and self.molecular_gnn is not None:
+            m_mol = self.molecular_gnn()
+            drug_emb = self.drug_fuse_proj(torch.cat([h_gat, m_mol], dim=-1))
+            return drug_emb
+        return h_gat
 
     def forward(
         self,

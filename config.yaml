@@ -11,7 +11,7 @@ data:
   num_diag: 50   # used only for synthetic; mimic uses processed meta.json sizes
   num_med: 100
   num_lab: 20
-  max_visits: 32
+  max_visits: 50
   train_ratio: 0.7
   val_ratio: 0.15
   test_ratio: 0.15
@@ -38,21 +38,30 @@ model:
     num_layers: 3
     heads: 4
     dropout: 0.2
+  molecular_gnn:
+    num_layers: 3
+    dropout: 0.2
+    d_out: 64  # d_k in paper; concatenated with GAT then projected
 
 loss:
   lambda_rec: 1.0
   lambda_ddi: 0.5
+  lambda_outcome: 0.3   # Module 7 stub — evaluates to 0 until outcome head is wired
+  lambda_xai: 0.1        # IG not implemented — evaluates to 0 in current experiments
   use_bce_logits: true
+  use_pos_weight: true   # class-imbalance stabilization (paper Section 9.1.1)
 
 training:
-  batch_size: 16
+  batch_size: 64
   num_epochs: 50
   lr: 1.0e-4
   weight_decay: 0.01
   warmup_epochs: 3
   early_stopping_patience: 15
   threshold: 0.5
+  grad_clip_norm: 1.0
   num_workers: 0
+  seeds: [42, 1, 123, 2024]  # four-seed statistical validation (paper Table 11)
 
 paths:
   processed_dir: data/processed

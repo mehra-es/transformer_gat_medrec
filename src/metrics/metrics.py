@@ -75,6 +75,49 @@ def ddi_rate(
     return float(np.mean(batch_rates))
 
 
+def safety_adjusted_effectiveness(jaccard: float, ddi_rate: float) -> float:
+    """SAE = Jaccard × (1 − DDI_rate) — paper Section 9.1."""
+    return jaccard * (1.0 - ddi_rate)
+
+
+def bootstrap_ci(
+    values: list[float],
+    n_resamples: int = 10000,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> tuple[float, float]:
+    """Bootstrap 95% confidence interval for a metric across seeds/runs."""
+    if not values:
+        return 0.0, 0.0
+    if len(values) == 1:
+        return values[0], values[0]
+    rng = np.random.default_rng(seed)
+    arr = np.asarray(values, dtype=np.float64)
+    boots = [rng.choice(arr, size=len(arr), replace=True).mean() for _ in range(n_resamples)]
+    alpha = (1.0 - ci) / 2.0
+    lo = float(np.quantile(boots, alpha))
+    hi = float(np.quantile(boots, 1.0 - alpha))
+    return lo, hi
+
+
+def aggregate_seed_metrics(seed_metrics: list[Dict[str, float]]) -> Dict[str, float]:
+    """Mean ± std and bootstrap CI across random seeds (paper Table 11)."""
+    if not seed_metrics:
+        return {}
+    keys = seed_metrics[0].keys()
+    out: Dict[str, float] = {}
+    for k in keys:
+        vals = [m[k] for m in seed_metrics]
+        out[f"{k}_mean"] = float(np.mean(vals))
+        out[f"{k}_std"] = float(np.std(vals))
+        lo, hi = bootstrap_ci(vals)
+        out[f"{k}_ci_lo"] = lo
+        out[f"{k}_ci_hi"] = hi
+    if "jaccard_mean" in out and "ddi_rate_mean" in out:
+        out["sae"] = safety_adjusted_effectiveness(out["jaccard_mean"], out["ddi_rate_mean"])
+    return out
+
+
 def compute_all_metrics(
     y_true: torch.Tensor,
     y_prob: torch.Tensor,
@@ -94,7 +137,9 @@ def compute_all_metrics(
     }
     if adj_upper is not None:
         adj_np = adj_upper.detach().cpu().numpy()
-        metrics["ddi_rate"] = ddi_rate(yp_prob, adj_np, threshold)
+        ddi = ddi_rate(yp_prob, adj_np, threshold)
+        metrics["ddi_rate"] = ddi
     else:
         metrics["ddi_rate"] = 0.0
+    metrics["sae"] = safety_adjusted_effectiveness(metrics["jaccard"], metrics["ddi_rate"])
     return metrics
