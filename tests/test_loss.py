@@ -24,6 +24,8 @@ def test_loss_scalar():
     loss, parts = criterion(probs, target, logits)
     assert loss.dim() == 0
     assert parts["l_rec"].numel() == 1
+    assert parts["l_outcome"].item() == 0.0
+    assert parts["l_xai"].item() == 0.0
 
 
 def test_ddi_loss_increases_with_interactions():

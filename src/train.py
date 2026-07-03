@@ -37,6 +37,7 @@ def build_model(config: Dict[str, Any], ablation: Optional[Dict[str, Any]] = Non
     """Create model from config and optional ablation overrides."""
     data_cfg = config["data"]
     m_cfg = config["model"]
+    mol_cfg = m_cfg.get("molecular_gnn", {})
     ab = ablation or {}
     return TransformerGATMedRec(
         num_diag=data_cfg["num_diag"],
@@ -50,11 +51,31 @@ def build_model(config: Dict[str, Any], ablation: Optional[Dict[str, Any]] = Non
         gat_layers=m_cfg["gat"]["num_layers"],
         gat_heads=m_cfg["gat"]["heads"],
         gat_dropout=m_cfg["gat"]["dropout"],
+        molecular_layers=mol_cfg.get("num_layers", 3),
+        molecular_dropout=mol_cfg.get("dropout", 0.2),
+        molecular_d_out=mol_cfg.get("d_out", 64),
         use_transformer=ab.get("use_transformer", True),
         use_gat=ab.get("use_gat", True),
         use_gated_fusion=ab.get("use_gated_fusion", True),
+        use_molecular_gnn=ab.get("use_molecular_gnn", True),
         max_visits=data_cfg.get("max_visits", 512),
     )
+
+
+def _compute_pos_weight(train_loader: DataLoader, num_med: int, device: str) -> torch.Tensor | None:
+    """Per-drug pos_weight = (neg_count / pos_count) for BCE stabilization."""
+    pos = torch.zeros(num_med)
+    total = 0
+    for batch in train_loader:
+        target = batch["target"]
+        pos += target.sum(dim=0).cpu()
+        total += target.size(0)
+    neg = total - pos
+    weight = neg / pos.clamp(min=1.0)
+    weight = weight.clamp(max=100.0)
+    if pos.sum() == 0:
+        return None
+    return weight.to(device)
 
 
 def _run_epoch(
@@ -67,6 +88,7 @@ def _run_epoch(
     optimizer: Optional[torch.optim.Optimizer] = None,
     adj_upper: Optional[torch.Tensor] = None,
     threshold: float = 0.5,
+    grad_clip_norm: float = 0.0,
 ) -> Tuple[float, Dict[str, float]]:
     train_mode = optimizer is not None
     model.train(train_mode)
@@ -90,6 +112,8 @@ def _run_epoch(
         if train_mode:
             optimizer.zero_grad()
             loss.backward()
+            if grad_clip_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
             optimizer.step()
 
         total_loss += loss.item()
@@ -130,11 +154,17 @@ def train_model(
     criterion = MedicationLoss(
         lambda_rec=loss_cfg["lambda_rec"],
         lambda_ddi=loss_cfg["lambda_ddi"],
+        lambda_outcome=loss_cfg.get("lambda_outcome", 0.3),
+        lambda_xai=loss_cfg.get("lambda_xai", 0.1),
         use_bce_logits=loss_cfg.get("use_bce_logits", True),
     )
     criterion.set_ddi_adjacency(adj_upper)
 
     t_cfg = config["training"]
+    if loss_cfg.get("use_pos_weight", False):
+        pw = _compute_pos_weight(train_loader, config["data"]["num_med"], device)
+        if pw is not None:
+            criterion.set_pos_weight(pw)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=t_cfg["lr"],
@@ -157,15 +187,16 @@ def train_model(
     stale = 0
     ckpt_path = Path(config["paths"]["best_checkpoint"])
     threshold = t_cfg.get("threshold", 0.5)
+    grad_clip_norm = t_cfg.get("grad_clip_norm", 0.0)
 
     for epoch in range(num_epochs):
         train_loss, train_metrics = _run_epoch(
             model, train_loader, criterion, edge_index, edge_weight, device,
-            optimizer, adj_upper, threshold,
+            optimizer, adj_upper, threshold, grad_clip_norm,
         )
         val_loss, val_metrics = _run_epoch(
             model, val_loader, criterion, edge_index, edge_weight, device,
-            None, adj_upper, threshold,
+            None, adj_upper, threshold, grad_clip_norm,
         )
         scheduler.step()
 

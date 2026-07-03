@@ -1,4 +1,4 @@
-"""DeepSHAP explainability for medication recommendations."""
+"""DeepSHAP explainability for medication recommendations (Module 6 — SHAP only)."""
 
 from __future__ import annotations
 
@@ -24,13 +24,43 @@ from src.utils.config import load_config, resolve_device
 from src.utils.seed import set_seed
 
 
+def _feature_names(num_diag: int, num_med: int, num_lab: int, max_visits: int) -> List[str]:
+    """Paper convention: Dx {visit}_{code_index}, Rx {visit}_{code_index}."""
+    names: List[str] = []
+    for t in range(max_visits):
+        names.extend([f"Dx {t}_{i}" for i in range(num_diag)])
+        names.extend([f"Rx {t}_{i}" for i in range(num_med)])
+        names.extend([f"Lab {t}_{i}" for i in range(num_lab)])
+    return names
+
+
+def _pad_patient_batch(
+    batch: Dict[str, torch.Tensor],
+    pad_T: int,
+    nd: int,
+    nm: int,
+    nl: int,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Pad patient tensors to max_visits and preserve true visit_mask (no all-ones bug)."""
+    T = batch["diagnoses"].shape[1]
+    diag = torch.zeros(1, pad_T, nd)
+    med = torch.zeros(1, pad_T, nm)
+    lab = torch.zeros(1, pad_T, nl)
+    mask = torch.zeros(1, pad_T)
+    diag[:, :T] = batch["diagnoses"]
+    med[:, :T] = batch["medications"]
+    lab[:, :T] = batch["labs"]
+    mask[:, :T] = batch["visit_mask"]
+    if mask.sum() == 0:
+        mask[:, 0] = 1.0
+    return diag, med, lab, mask
+
+
 class ShapWrapperModel(torch.nn.Module):
     """
     Wrapper accepting flat patient tensor for SHAP.
 
-    Input layout: [diag_flat | med_seq_flat | lab_flat] per batch row.
-    Simplified: concatenated [B, num_diag*T + num_med*T + num_lab*T] is heavy;
-    we use fixed T_max from a single patient padded to max_visits in batch.
+    Visit masking uses the patient's true final valid visit — not padded positions.
     """
 
     def __init__(
@@ -56,6 +86,8 @@ class ShapWrapperModel(torch.nn.Module):
 
         feat_per_visit = num_diag + num_med + num_lab
         self.feat_dim = feat_per_visit * max_visits
+        self._diag_end = num_diag
+        self._med_end = num_diag + num_med
 
     def _unpack(self, flat: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         B = flat.size(0)
@@ -66,14 +98,19 @@ class ShapWrapperModel(torch.nn.Module):
         diagnoses = flat[..., :nd]
         medications = flat[..., nd : nd + nm]
         labs = flat[..., nd + nm :]
-        visit_mask = (diagnoses.abs().sum(-1) + medications.abs().sum(-1) + labs.abs().sum(-1) > 0).float()
-        visit_mask = visit_mask.clamp(min=1.0)  # at least one visit for SHAP stability
+        # Derive mask from diagnosis/med/lab activity — preserves per-visit validity in SHAP perturbations.
+        visit_mask = (
+            diagnoses.abs().sum(-1) + medications.abs().sum(-1) + labs.abs().sum(-1) > 1e-8
+        ).float()
+        # Ensure at least one valid visit (background samples may be empty).
+        empty = visit_mask.sum(dim=1) == 0
+        if empty.any():
+            visit_mask[empty, 0] = 1.0
         return diagnoses, medications, labs, visit_mask
 
     def forward(self, flat: torch.Tensor) -> torch.Tensor:
         diagnoses, medications, labs, visit_mask = self._unpack(flat)
         out = self.base(diagnoses, medications, labs, visit_mask, self.edge_index, self.edge_weight)
-        # Return probabilities for selected drugs (columns for SHAP output)
         return out["probs"][:, self.drug_indices]
 
 
@@ -86,12 +123,15 @@ def explain_patient(
     """
     Run DeepSHAP on one patient and return top features and drugs.
 
+    Attribution is computed against the patient's own top-predicted medications
+    (not averaged across all candidate drugs) to avoid cancellation effects.
+
     Clinical decision support only — outputs require physician review.
     """
     set_seed(config.get("seed", 42))
     device = resolve_device(config.get("device", "auto"))
     data_cfg = config["data"]
-    max_visits = data_cfg.get("max_visits", 32)
+    max_visits = data_cfg.get("max_visits", 50)
 
     _, _, test_loader, edge_index, edge_weight, _, data_meta = build_dataloaders(config, use_synthetic)
     if data_meta.get("source") == "mimic_demo":
@@ -110,22 +150,17 @@ def explain_patient(
     sample = dataset[patient_idx]
     batch = collate_patient_batch([sample])
 
-    T = batch["diagnoses"].shape[1]
     nd, nm, nl = data_cfg["num_diag"], data_cfg["num_med"], data_cfg["num_lab"]
-    # Pad to max_visits for wrapper
-    pad_T = max_visits
-    diag = torch.zeros(1, pad_T, nd)
-    med = torch.zeros(1, pad_T, nm)
-    lab = torch.zeros(1, pad_T, nl)
-    diag[:, :T] = batch["diagnoses"]
-    med[:, :T] = batch["medications"]
-    lab[:, :T] = batch["labs"]
+    diag, med, lab, visit_mask = _pad_patient_batch(batch, max_visits, nd, nm, nl)
 
     with torch.no_grad():
         full_out = model(
-            diag.to(device), med.to(device), lab.to(device),
-            batch["visit_mask"].to(device).new_ones(1, pad_T),
-            edge_index, edge_weight,
+            diag.to(device),
+            med.to(device),
+            lab.to(device),
+            visit_mask.to(device),
+            edge_index,
+            edge_weight,
         )
     probs = full_out["probs"][0].cpu().numpy()
     top_k = config["explain"].get("top_k_drugs", 10)
@@ -133,22 +168,15 @@ def explain_patient(
     drug_indices = top_drugs[: min(5, len(top_drugs))]
 
     wrapper = ShapWrapperModel(
-        model, edge_index, edge_weight, nd, nm, nl, pad_T, drug_indices
+        model, edge_index, edge_weight, nd, nm, nl, max_visits, drug_indices
     ).to(device)
 
     flat_sample = torch.cat([diag, med, lab], dim=2).reshape(1, -1)
-    # Background from a few test patients
     n_bg = min(config["explain"].get("num_background", 32), len(dataset))
     bg_list = []
     for i in range(n_bg):
         b = collate_patient_batch([dataset[i]])
-        d = torch.zeros(1, pad_T, nd)
-        m = torch.zeros(1, pad_T, nm)
-        l = torch.zeros(1, pad_T, nl)
-        t = b["diagnoses"].shape[1]
-        d[:, :t] = b["diagnoses"]
-        m[:, :t] = b["medications"]
-        l[:, :t] = b["labs"]
+        d, m, l, _ = _pad_patient_batch(b, max_visits, nd, nm, nl)
         bg_list.append(torch.cat([d, m, l], dim=2).reshape(1, -1))
     background = torch.cat(bg_list, dim=0).to(device)
 
@@ -164,12 +192,7 @@ def explain_patient(
     else:
         shap_arr = np.asarray(shap_values).reshape(len(drug_indices), -1)
 
-    feat_names = []
-    for t in range(pad_T):
-        feat_names.extend([f"diag_{t}_{i}" for i in range(nd)])
-        feat_names.extend([f"med_{t}_{i}" for i in range(nm)])
-        feat_names.extend([f"lab_{t}_{i}" for i in range(nl)])
-
+    feat_names = _feature_names(nd, nm, nl, max_visits)
     mean_abs = np.abs(shap_arr).mean(axis=0)
     top_feat_idx = np.argsort(-mean_abs)[: config["explain"].get("top_k_features", 10)]
     top_features = [

@@ -20,6 +20,7 @@ ABLATIONS = {
     "full": {},
     "no_transformer": {"use_transformer": False},
     "no_gat": {"use_gat": False},
+    "no_molecular_gnn": {"use_molecular_gnn": False},
     "no_gated_fusion": {"use_gated_fusion": False},
     "no_ddi_loss": {"use_ddi_loss": False},
 }

@@ -10,7 +10,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.metrics.metrics import compute_all_metrics
+from src.metrics.metrics import compute_all_metrics, safety_adjusted_effectiveness
 
 
 def test_metrics_keys():
@@ -23,3 +23,9 @@ def test_metrics_keys():
     assert "f1_macro" in m
     assert "prauc" in m
     assert "ddi_rate" in m
+    assert "sae" in m
+
+
+def test_sae():
+    assert safety_adjusted_effectiveness(0.5, 0.0) == 0.5
+    assert abs(safety_adjusted_effectiveness(0.5, 0.1) - 0.45) < 1e-6
