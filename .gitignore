@@ -10,6 +10,8 @@ logs/
 .DS_Store
 .idea/
 .vscode/
+*.docx
+final_paper-mehra_esfandiari_.docx
 data/raw/mimiciii-demo/*.zip
 data/raw/mimiciii-demo/mimic-iii-clinical-database-demo-1.4/
 data/processed/mimic_demo/
